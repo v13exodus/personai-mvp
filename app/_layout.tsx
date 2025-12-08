@@ -1,59 +1,64 @@
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import 'react-native-reanimated';
+    // app/(tabs)/_layout.tsx
+    import { Tabs } from 'expo-router';
+    import React from 'react';
+    // Removed Platform import as it's not currently used
+    import { Leaf, Map, BookOpen, Brain } from 'lucide-react-native'; // Nature icons
+    import { Colors } from '@/constants/Colors';
 
-import { useColorScheme } from '@/components/useColorScheme';
+    export default function TabLayout() {
+      return (
+        <Tabs
+          screenOptions={{
+            tabBarActiveTintColor: Colors.light.tint,
+            tabBarInactiveTintColor: Colors.light.tabIconDefault,
+            headerShown: false, // We will build custom headers later
+            tabBarStyle: {
+              backgroundColor: Colors.light.background,
+              borderTopWidth: 0,
+              elevation: 0,
+              height: 60,
+              paddingBottom: 10,
+            },
+            // The tabs themselves must declare their `name` property which matches the filename
+            // inside the (tabs) folder.
+          }}>
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
+          {/* Tab 1: Memory (Corresponds to app/(tabs)/memory.tsx) */}
+          <Tabs.Screen
+            name="memory"
+            options={{
+              title: 'Memory',
+              tabBarIcon: ({ color }) => <Brain size={24} color={Colors.light.icon} />,
+            }}
+          />
 
-export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
-};
+          {/* Tab 2: Programs (Corresponds to app/(tabs)/programs.tsx) */}
+          <Tabs.Screen
+            name="programs"
+            options={{
+              title: 'Programs',
+              tabBarIcon: ({ color }) => <BookOpen size={24} color={Colors.light.icon} />,
+            }}
+          />
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
+          {/* Tab 3: Quests (Corresponds to app/(tabs)/quests.tsx) */}
+          <Tabs.Screen
+            name="quests"
+            options={{
+              title: 'Quests',
+              tabBarIcon: ({ color }) => <Map size={24} color={Colors.light.icon} />,
+            }}
+          />
 
-export default function RootLayout() {
-  const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-    ...FontAwesome.font,
-  });
-
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
-  useEffect(() => {
-    if (error) throw error;
-  }, [error]);
-
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
+          {/* Tab 4: Chat (Corresponds to app/(tabs)/chat.tsx) */}
+          <Tabs.Screen
+            name="chat"
+            options={{
+              title: 'Chat',
+              tabBarIcon: ({ color }) => <Leaf size={24} color={Colors.light.icon} />,
+            }}
+          />
+        </Tabs>
+      );
     }
-  }, [loaded]);
-
-  if (!loaded) {
-    return null;
-  }
-
-  return <RootLayoutNav />;
-}
-
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
-
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
-  );
-}
+    
