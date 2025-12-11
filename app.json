@@ -1,28 +1,38 @@
 {
   "expo": {
-    "name": "PersonAI-App",
+    "name": "PersonAI",
     "slug": "PersonAI-App",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/logo.png",
-    "scheme": "personaiapp",
+    "icon": "./assets/images/icon.png",
+    "scheme": "personai",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/images/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.personai",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Allow PersonAI to access your photos to share them in chat.",
+        "NSCameraUsageDescription": "Allow PersonAI to access your camera to take photos for sharing.",
+        "NSPhotoLibraryAddUsageDescription": "Allow PersonAI to save photos to your library."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "package": "com.yourcompany.personai",
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -34,6 +44,14 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      // "router": { // <--- REMOVED THIS BLOCK ENTIRELY
+      //   "origin": null
+      // },
+      "eas": {
+        "projectId": "{your_eas_project_id}"
+      }
     }
   }
 }

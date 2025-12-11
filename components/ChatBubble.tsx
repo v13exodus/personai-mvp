@@ -1,61 +1,99 @@
-    // components/ChatBubble.tsx
-    import React from 'react';
-    import { View, Text, StyleSheet } from 'react-native';
-    import { Colors } from '@/constants/Colors'; // Your custom colors
+// components/ChatBubble.tsx
+import React from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Linking } from 'react-native';
+import { Colors } from '@/constants/Colors'; // Assuming Colors is correctly imported from constants/Colors.ts
+import { ExternalLink } from './ExternalLink'; // Assuming you have this component for links
 
-    type MessageBubbleProps = {
-      text: string;
-      sender: 'user' | 'ai';
-    };
+type ChatBubbleProps = {
+  text: string;
+  sender: 'user' | 'ai';
+  fileUrl?: string; // New prop for file URL
+  fileType?: 'text' | 'image' | 'audio' | 'document'; // New prop for file type
+  fileName?: string; // New prop for file name
+};
 
-    export function ChatBubble({ text, sender }: MessageBubbleProps) {
-      const isUser = sender === 'user';
-      const bubbleStyle = isUser ? styles.userBubble : styles.aiBubble;
-      const textStyle = isUser ? styles.userText : styles.aiText;
+export function ChatBubble({ text, sender, fileUrl, fileType, fileName }: ChatBubbleProps) {
+  const isUser = sender === 'user';
 
-      return (
-        <View style={[styles.bubbleContainer, { alignSelf: isUser ? 'flex-end' : 'flex-start' }]}>
-          <View style={[styles.baseBubble, bubbleStyle]}>
-            <Text style={textStyle}>{text}</Text>
-          </View>
-        </View>
-      );
+  const handleFilePress = () => {
+    if (fileUrl && fileType === 'document') {
+      Linking.openURL(fileUrl).catch(err => console.error("Couldn't load page", err));
     }
+  };
 
-    const styles = StyleSheet.create({
-      bubbleContainer: {
-        maxWidth: '80%', // Limit bubble width
-        marginVertical: 4,
-        marginHorizontal: 10,
-        // Aligned by parent's alignSelf
-      },
-      baseBubble: {
-        paddingVertical: 10,
-        paddingHorizontal: 15,
-        borderRadius: 15,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.15,
-        shadowRadius: 2,
-        elevation: 2,
-      },
-      userBubble: {
-        backgroundColor: Colors.light.primaryLight, // Your Sprout Green
-        borderBottomRightRadius: 2, // Organic, asymmetric feel
-      },
-      aiBubble: {
-        backgroundColor: Colors.light.cardBackground, // Paper-like white
-        borderBottomLeftRadius: 2, // Organic, asymmetric feel
-      },
-      userText: {
-        color: Colors.light.text.primary, // Darker text for user messages
-        fontSize: 16,
-        // fontFamily: 'Inter Tight', // Apply once fonts are loaded
-      },
-      aiText: {
-        color: Colors.light.text.primary, // Darker text for AI messages
-        fontSize: 16,
-        // fontFamily: 'Inter Tight', // Apply once fonts are loaded
-      },
-    });
-    
+  return (
+    <View style={[styles.bubbleContainer, isUser ? styles.userContainer : styles.aiContainer]}>
+      {fileUrl && fileType === 'image' && (
+        <Image
+          source={{ uri: fileUrl }}
+          style={styles.imageAttachment}
+          resizeMode="contain"
+        />
+      )}
+      {fileUrl && fileType === 'document' && (
+        <TouchableOpacity onPress={handleFilePress} style={styles.documentAttachment}>
+          <Text style={styles.documentText}>📄 {fileName || 'Document'}</Text>
+          <Text style={styles.documentLink}>Tap to open</Text>
+        </TouchableOpacity>
+      )}
+      <Text style={[styles.text, isUser ? styles.userText : styles.aiText]}>
+        {text}
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  bubbleContainer: {
+    maxWidth: '80%',
+    marginVertical: 4,
+    marginHorizontal: 10,
+    borderRadius: 18, // From app.json: cornerRadius.chatBubbles
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+  },
+  userContainer: {
+    alignSelf: 'flex-end',
+    backgroundColor: Colors.light.chatUserBubble, // Corrected from Colors.light.chatBubbleUser
+    borderBottomRightRadius: 2,
+  },
+  aiContainer: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.light.chatAssistantBubble, // Corrected from Colors.light.chatBubbleAI
+    borderBottomLeftRadius: 2,
+  },
+  text: {
+    fontSize: 16,
+    lineHeight: 22,
+    // fontFamily: 'Quicksand_400Regular', // Will apply this once expo-font is set up
+  },
+  userText: {
+    color: Colors.light.buttonText, // Corrected: Using buttonText for inverse color on dark user bubble
+  },
+  aiText: {
+    color: Colors.light.textPrimary, // Corrected: Using textPrimary for text on light AI bubble
+  },
+  imageAttachment: {
+    width: 200, // Or dynamic width based on parent
+    height: 150,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  documentAttachment: {
+    backgroundColor: Colors.light.backgroundPaperSecondary, // Corrected: Using a suitable background color
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  documentText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: Colors.light.textPrimary, // Corrected: Using textPrimary
+  },
+  documentLink: {
+    fontSize: 12,
+    color: Colors.light.tealAccent, // Corrected: Using tealAccent for links
+    marginTop: 4,
+  }
+});
