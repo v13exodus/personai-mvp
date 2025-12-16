@@ -1,35 +1,47 @@
 import { Tabs } from 'expo-router';
-import React from 'react';
-
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+    <Tabs screenOptions={{ tabBarActiveTintColor: '#007AFF' }}>
+      
+      {/* Home Tab (Mapped to home.tsx) */}
       <Tabs.Screen
-        name="index"
+        name="home" 
         options={{
           title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons name="home" size={24} color={color} />,
+          headerShown: false, 
         }}
       />
+
+      {/* Chat Tab */}
       <Tabs.Screen
-        name="explore"
+        name="chat"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'Chat',
+          tabBarIcon: ({ color }) => <Ionicons name="chatbubbles" size={24} color={color} />,
         }}
       />
+
+      {/* Action Tab */}
+      <Tabs.Screen
+        name="action"
+        options={{
+          title: 'Action',
+          tabBarIcon: ({ color }) => <Ionicons name="flash" size={24} color={color} />,
+        }}
+      />
+
+      {/* Mission Tab */}
+      <Tabs.Screen
+        name="mission"
+        options={{
+          title: 'Mission',
+          tabBarIcon: ({ color }) => <Ionicons name="flag" size={24} color={color} />,
+        }}
+      />
+
     </Tabs>
   );
 }
