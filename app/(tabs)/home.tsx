@@ -1,160 +1,278 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
-import * as LocalAuthentication from 'expo-local-authentication';
-import ProfileCard from '@/components/ProfileCard';
-import { supabase } from '@/utils/supabase';
+import React, { useState, useCallback } from 'react';
+import { 
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, 
+  ActivityIndicator, RefreshControl 
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter, useFocusEffect } from 'expo-router';
+import supabase from '../../supabaseConfig';
+import ProfileCard from '@/components/ProfileCard'; // Keep your existing component if you wish
 
 export default function HomeScreen() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // HUD State
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [topic, setTopic] = useState<string | null>(null);
+  const [mission, setMission] = useState<any>(null);
+  const [pendingActions, setPendingActions] = useState(0);
 
-  // 1. Authenticate on mount (optional) or wait for user tap
-  const authenticate = async () => {
+  const fetchData = async () => {
     try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      setUserEmail(user.email);
 
-      if (!hasHardware || !isEnrolled) {
-        // Fallback for devices without biometrics (or Simulator)
-        setIsUnlocked(true);
-        return;
+      // 1. Get Chat Logline (From most recent active conversation)
+      const { data: conv } = await supabase
+        .from('conversations')
+        .select('summary')
+        .eq('user_id', user.id)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (conv?.summary?.current_topic) {
+        setTopic(conv.summary.current_topic);
+      } else {
+        setTopic("Awaiting initialization...");
       }
 
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock PersonalAI',
-        fallbackLabel: 'Use Passcode',
-      });
+      // 2. Get Active Mission
+      const { data: activeMission } = await supabase
+        .from('missions')
+        .select('title, current_level') 
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .maybeSingle();
+      
+      setMission(activeMission);
 
-      if (result.success) {
-        setIsUnlocked(true);
-      }
-    } catch (error) {
-      console.log('Auth error:', error);
-      // On web/simulator errors, we might want to just unlock for dev convenience
-      if (Platform.OS === 'web') setIsUnlocked(true); 
+      // 3. Get Action Count
+      const { count } = await supabase
+        .from('actions')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('status', 'pending');
+      
+      setPendingActions(count || 0);
+
+    } catch (e) {
+      console.log(e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    // Fetch User Data
-    const fetchUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) setUserEmail(user.email);
-    };
-    fetchUser();
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [])
+  );
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserEmail(session?.user?.email || null);
-    });
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchData();
+  };
 
-    return () => { subscription.unsubscribe(); };
-  }, []);
-
-  // 2. The "Veil" (Privacy Shield)
-  if (!isUnlocked) {
+  if (loading) {
     return (
-      <View style={styles.lockContainer}>
-        <View style={styles.lockCircle} />
-        <Text style={styles.lockTitle}>PersonalAI</Text>
-        <Text style={styles.lockSubtitle}>Protected</Text>
-        
-        <TouchableOpacity style={styles.unlockButton} onPress={authenticate}>
-          <Text style={styles.unlockButtonText}>Tap to Unlock</Text>
-        </TouchableOpacity>
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator color="#1B4D1B" />
       </View>
     );
   }
 
-  // 3. The Actual Home Content (Your original code)
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
       <ProfileCard userEmail={userEmail} />
 
-      <View style={styles.summarySection}>
-        <Text style={styles.summaryTitle}>Chat Summary</Text>
-        <Text style={styles.summaryContent}>You have 3 unread messages.</Text>
+      {/* 1. THE SIGNAL (Chat Summary) */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="radio-outline" size={18} color="#6A7D6A" />
+          <Text style={styles.sectionTitle}>CURRENT SIGNAL</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.card}
+          onPress={() => router.push('/(tabs)/chat')}
+        >
+          <Text style={styles.signalText}>
+            {topic || "No active signal. Initiate dialogue."}
+          </Text>
+          <View style={styles.linkRow}>
+            <Text style={styles.linkText}>Open Channel</Text>
+            <Ionicons name="arrow-forward" size={14} color="#1B4D1B" />
+          </View>
+        </TouchableOpacity>
       </View>
 
-      <View style={styles.summarySection}>
-        <Text style={styles.summaryTitle}>Actions Summary</Text>
-        <Text style={styles.summaryContent}>2 pending actions need your attention.</Text>
+      {/* 2. THE MISSION (Curriculum) */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="map-outline" size={18} color="#6A7D6A" />
+          <Text style={styles.sectionTitle}>ACTIVE PROTOCOL</Text>
+        </View>
+        
+        {mission ? (
+          <TouchableOpacity 
+            style={[styles.card, styles.missionCard]}
+            onPress={() => router.push('/(tabs)/missions')}
+          >
+            <View>
+              <Text style={styles.missionTitle}>{mission.title}</Text>
+              <Text style={styles.missionLevel}>Level {mission.current_level}</Text>
+            </View>
+            <Ionicons name="play-circle-outline" size={32} color="#FFF" />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity 
+            style={[styles.card, styles.inactiveCard]}
+            onPress={() => router.push('/(tabs)/chat')}
+          >
+            <Text style={styles.inactiveText}>No Active Mission</Text>
+            <Text style={styles.inactiveSub}>Consult AI to build curriculum.</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      <View style={styles.summarySection}>
-        <Text style={styles.summaryTitle}>Missions Summary</Text>
-        <Text style={styles.summaryContent}>1 active mission in progress.</Text>
+      {/* 3. THE GRIND (Actions) */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="checkbox-outline" size={18} color="#6A7D6A" />
+          <Text style={styles.sectionTitle}>PENDING ACTIONS</Text>
+        </View>
+        
+        <TouchableOpacity 
+          style={styles.card}
+          onPress={() => router.push('/(tabs)/actions')}
+        >
+          <View style={styles.actionRow}>
+            <Text style={styles.actionCount}>{pendingActions}</Text>
+            <Text style={styles.actionLabel}>Tasks Remaining</Text>
+          </View>
+          {pendingActions > 0 && (
+             <Text style={styles.actionUrgent}>Execute now.</Text>
+          )}
+        </TouchableOpacity>
       </View>
+
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  // Lock Screen Styles
-  lockContainer: {
-    flex: 1,
-    backgroundColor: '#F3E9D7',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  lockCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#1B4D1B',
-    marginBottom: 20,
-  },
-  lockTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#123122',
-    marginBottom: 5,
-  },
-  lockSubtitle: {
-    fontSize: 16,
-    color: '#6A7D6A',
-    marginBottom: 40,
-  },
-  unlockButton: {
-    backgroundColor: '#1B4D1B',
-    paddingVertical: 15,
-    paddingHorizontal: 40,
-    borderRadius: 30,
-  },
-  unlockButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-
-  // Main Content Styles
   container: {
     flex: 1,
     backgroundColor: '#F8F1E3',
   },
-  summarySection: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 15,
-    marginHorizontal: 15,
-    marginTop: 15,
-    // iOS Shadow
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    // Android Shadow
-    elevation: 2,
-    // Fix for "Text Node" error: ensure no stray spaces here
+  center: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
   },
-  summaryTitle: {
+  section: {
+    paddingHorizontal: 20,
+    marginBottom: 30,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#6A7D6A',
+    letterSpacing: 1,
+  },
+  card: {
+    backgroundColor: '#FFF',
+    padding: 20,
+    borderRadius: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  signalText: {
     fontSize: 18,
+    color: '#123122',
+    fontStyle: 'italic',
+    marginBottom: 15,
+    lineHeight: 24,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 5,
+  },
+  linkText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1B4D1B',
+  },
+  missionCard: {
+    backgroundColor: '#1B4D1B',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  missionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFF',
+  },
+  missionLevel: {
+    fontSize: 14,
+    color: '#A5D6A7',
+    marginTop: 4,
+  },
+  inactiveCard: {
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: '#999',
+  },
+  inactiveText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#666',
+  },
+  inactiveSub: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 4,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 10,
+  },
+  actionCount: {
+    fontSize: 48,
     fontWeight: 'bold',
     color: '#123122',
-    marginBottom: 8,
   },
-  summaryContent: {
-    fontSize: 14,
-    color: '#6A7D6A',
+  actionLabel: {
+    fontSize: 16,
+    color: '#666',
+  },
+  actionUrgent: {
+    marginTop: 5,
+    color: '#D32F2F',
+    fontWeight: 'bold',
+    fontSize: 12,
+    textTransform: 'uppercase',
   },
 });

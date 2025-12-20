@@ -1,97 +1,103 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Button, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { supabase } from '@/utils/supabase';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { lockState } from '../components/BiometricGate';
+import supabase from '../supabaseConfig';
 
-export default function WelcomeScreen() {
+export default function Index() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session) {
-        try {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('has_accepted_disclaimer')
-            .eq('id', session.user.id)
-            .maybeSingle();
+    let mounted = true;
 
-          if (profile?.has_accepted_disclaimer) {
-            router.replace('/(tabs)/home');
-          } else {
-            router.replace('/(auth)/disclaimer');
+    const init = async () => {
+      // 1. WEB SPECIFIC: Manual Hash Handling
+      // Sometimes Supabase auto-detect fails on redirects; we do it manually here.
+      if (Platform.OS === 'web' && window.location.hash?.includes('access_token')) {
+        console.log('Web: Hash detected. Manually parsing tokens...');
+        try {
+          // Remove the '#' and parse
+          const params = new URLSearchParams(window.location.hash.substring(1));
+          const access_token = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
+
+          if (access_token && refresh_token) {
+            const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+            if (!error) {
+              console.log('Manual session set successful.');
+              lockState.justLoggedIn = true;
+              // The listener below will catch the SIGNED_IN event next
+              return; 
+            }
           }
         } catch (e) {
-          console.error("Profile check failed", e);
-          setLoading(false); 
+          console.error('Manual hash parsing failed:', e);
         }
+      }
+
+      // 2. Standard Session Check (Mobile & Web Cold Start)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        console.log('Session found (Cold Start). Redirecting...');
+        if (lockState.justLoggedIn) lockState.isLocked = false;
+        router.replace('/(tabs)/home');
       } else {
-        setLoading(false);
+        // Only stop checking if we didn't just manually set the session
+        if (mounted && !window.location.hash?.includes('access_token')) {
+          setChecking(false);
+        }
+      }
+    };
+
+    init();
+
+    // 3. Listener handles the result
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log(`Auth Event: ${event}`);
+      
+      if (session) {
+        console.log('Session confirmed. Redirecting...');
+        lockState.justLoggedIn = true;
+        lockState.isLocked = false;
+        router.replace('/(tabs)/home');
       }
     });
 
     return () => {
-      subscription.unsubscribe();
+      mounted = false;
+      authListener.subscription.unsubscribe();
     };
   }, []);
 
-  if (loading) {
+  const handleGetStarted = () => {
+    router.push('/(auth)/auth');
+  };
+
+  if (checking) {
     return (
-      <View style={[styles.container, { justifyContent: 'center' }]}>
+      <View style={styles.container}>
         <ActivityIndicator size="large" color="#1B4D1B" />
+        <Text style={{marginTop: 10, color: '#1B4D1B'}}>Verifying Identity...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      {/* FIXED: Replaced Image with a View to stop the network error */}
-      <View style={[styles.logo, { backgroundColor: '#1B4D1B' }]} />
-      
+      <View style={styles.circle} />
       <Text style={styles.title}>Welcome to PersonalAI</Text>
-      <Text style={styles.subtitle}>Your minimalist personal companion.</Text>
-      
-      <View style={styles.buttonContainer}>
-        <Button 
-          title="Get Started" 
-          onPress={() => router.push('/(auth)/auth')} 
-          color="#1B4D1B"
-        />
-      </View>
+      <TouchableOpacity style={styles.button} onPress={handleGetStarted}>
+        <Text style={styles.buttonText}>GET STARTED</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F3E9D7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  logo: {
-    width: 120,
-    height: 120,
-    marginBottom: 30,
-    borderRadius: 60,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#123122',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#486356',
-    marginBottom: 40,
-    textAlign: 'center',
-  },
-  buttonContainer: {
-    width: '100%',
-    maxWidth: 300,
-    gap: 15,
-  },
+  container: { flex: 1, backgroundColor: '#F3E9D7', alignItems: 'center', justifyContent: 'center' },
+  circle: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#1B4D1B', marginBottom: 20 },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#123122', marginBottom: 20 },
+  button: { backgroundColor: '#1B4D1B', paddingVertical: 12, paddingHorizontal: 30, borderRadius: 8 },
+  buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
 });

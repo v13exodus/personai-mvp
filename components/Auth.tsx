@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
     import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-    import { supabase } from '@/utils/supabase'; // Adjust import path if necessary
+    import supabase from '../supabaseConfig'; 
     import * as WebBrowser from 'expo-web-browser'; // <--- ADD THIS IMPORT
     import * as AuthSession from 'expo-auth-session'; // <--- ADD THIS IMPORT
 

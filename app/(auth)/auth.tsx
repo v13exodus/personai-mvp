@@ -1,83 +1,113 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button, View, Text, ActivityIndicator, Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { makeRedirectUri } from 'expo-auth-session';
-import { supabase } from '@/utils/supabase';
+import * as AuthSession from 'expo-auth-session';
+import supabase from '../../supabaseConfig';
 import { useRouter } from 'expo-router';
+import { lockState } from '../../components/BiometricGate';
 
 WebBrowser.maybeCompleteAuthSession();
 
 export default function AuthScreen() {
   const router = useRouter();
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const checkSessionAndRedirect = async () => {
+    // 1. Check if we already have a session (Aggressive Check)
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      console.log('Session found immediately. Redirecting...');
+      lockState.justLoggedIn = true;
+      router.replace('/(tabs)/home');
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    const init = async () => {
+      // A. Check for existing session first
+      const hasSession = await checkSessionAndRedirect();
+      if (hasSession) return;
+
+      // B. Web Specific: If hash exists, show spinner while we wait for Supabase
+      if (Platform.OS === 'web') {
+        if (window.location.hash && window.location.hash.includes('access_token')) {
+          console.log('Web: Token detected. Finalizing session...');
+          setLoading(true);
+        }
+      }
+    };
+    init();
+
+    // C. Listen for new events (Backup)
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log('AUTH EVENT:', event);
+        if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
+          lockState.justLoggedIn = true;
+          console.log('Login event received. Redirecting...');
+          router.replace('/(tabs)/home');
+        }
+      }
+    );
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   const signInWithGoogle = async () => {
     setLoading(true);
     try {
-      // 1. WEB: Use direct redirect (Fixes the Popup/COOP error)
       if (Platform.OS === 'web') {
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: {
-            // Redirects to http://localhost:8081/ which is handled by app/index.tsx
-            redirectTo: window.location.origin, 
-            skipBrowserRedirect: false, 
-          },
+          options: { redirectTo: window.location.origin },
         });
         if (error) throw error;
-        return; // The page will reload/redirect, so we stop here
+        return;
       }
 
-      // 2. MOBILE: Use AuthSession (Popup)
-      const redirectUrl = makeRedirectUri({ path: '/auth/callback' });
+      const redirectTo = AuthSession.makeRedirectUri({ useProxy: true });
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo: redirectUrl,
-          skipBrowserRedirect: true,
-        },
+        options: { redirectTo, skipBrowserRedirect: true },
       });
-
       if (error) throw error;
+
       if (data?.url) {
-        await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+        const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+        if (result.type === 'success' && result.url) {
+          const fragment = result.url.split('#')[1];
+          if (fragment) {
+            const params = new URLSearchParams(fragment);
+            const access_token = params.get('access_token');
+            const refresh_token = params.get('refresh_token');
+            if (access_token && refresh_token) {
+              await supabase.auth.setSession({ access_token, refresh_token });
+            }
+          }
+        }
       }
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
+      console.error('Auth error:', err);
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        setLoading(true);
-        
-        // Check profile (using maybeSingle to prevent 406 errors)
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('has_accepted_disclaimer')
-          .eq('id', session.user.id)
-          .maybeSingle();
-
-        if (profile?.has_accepted_disclaimer) {
-          router.replace('/(tabs)/home');
-        } else {
-          router.replace('/(auth)/disclaimer');
-        }
-        setLoading(false);
-      }
-    });
-
-    return () => { authListener.subscription.unsubscribe(); };
-  }, []);
-
   return (
     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3E9D7' }}>
       <Text style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 20, color: '#123122' }}>Sign In</Text>
-      {loading ? <ActivityIndicator size="large" color="#1B4D1B" /> : 
+      
+      {loading ? (
+        <View style={{ alignItems: 'center' }}>
+          <ActivityIndicator size="large" color="#1B4D1B" />
+          <Text style={{ marginTop: 10, color: '#666' }}>Verifying Identity...</Text>
+        </View>
+      ) : (
         <Button title="Sign in with Google" onPress={signInWithGoogle} color="#1B4D1B" />
-      }
+      )}
     </View>
   );
 }

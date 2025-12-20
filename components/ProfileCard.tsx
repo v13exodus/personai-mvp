@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { supabase } from '@/utils/supabase';
+import supabase from '../supabaseConfig'; 
 import { useRouter } from 'expo-router';
 
 interface ProfileCardProps {
