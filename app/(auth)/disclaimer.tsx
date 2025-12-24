@@ -9,7 +9,7 @@ import {
   Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import supabase from '../../supabaseConfig'; 
+import { supabase } from '../../lib/supabase';
 
 export default function DisclaimerScreen() {
   const router = useRouter();

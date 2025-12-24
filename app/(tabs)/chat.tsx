@@ -1,259 +1,215 @@
+/* [FILE: chat.tsx] */
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, 
-  KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Alert, Keyboard 
+  View, Text, TextInput, TouchableOpacity, FlatList, 
+  StyleSheet, KeyboardAvoidingView, Platform, Dimensions, NativeSyntheticEvent, TextInputKeyPressEventData 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import supabase from '../../supabaseConfig';
+import { supabase } from '../../lib/supabase';
 
-// --- TYPES ---
-type Message = {
-  id: string;
-  text: string;
-  sender: 'user' | 'ai';
-  timestamp: string;
-};
+const { width } = Dimensions.get('window');
+const IS_WEB = Platform.OS === 'web';
 
-const THINKING_STATES = [
-  "Reflecting...", "Sensing...", "Calibrating...", "Connecting...", 
-  "Assimilating...", "Observing...", "Aligning...", "Processing..."
-];
+const THRESHOLD_OPENER = "Time is the only resource we cannot negotiate. You have 30 minutes of focused clarity today. This window only opens for those ready to move. If you are here to do the work, say HI.";
+const CANONICAL_OPENER = "I'm here. Tell me the person, character, or book whose essence you'd like me to carry — and we’ll begin.";
+
+type Message = { id: string; content: string; role: 'user' | 'assistant'; created_at: string; };
 
 export default function ChatScreen() {
   const [message, setMessage] = useState('');
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const [turnCount, setTurnCount] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [summary, setSummary] = useState<any>(null);
-  const [thinkingText, setThinkingText] = useState('Thinking...');
-  const [activeLens, setActiveLens] = useState<string>('Gateway'); 
-  const [activeStrategy, setActiveStrategy] = useState<string>('');
-
-  const flatListRef = useRef<FlatList>(null);
+  const [isInitiated, setIsInitiated] = useState(false);
+  const [seconds, setSeconds] = useState(1800); 
+  const [systemError, setSystemError] = useState<string | null>(null);
+  
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        setUserId(session.user.id);
-        await Promise.all([restoreSession(session.user.id), fetchLens(session.user.id)]);
-      } else {
-        addSystemMessage("Please sign in to start your journey.");
+    const initializeChat = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      setUserId(user.id);
+
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (data && data.length > 0) {
+        setChatHistory(data);
+        setIsInitiated(true);
       }
     };
-    init();
+    initializeChat();
   }, []);
 
-  const addSystemMessage = (text: string) => {
-    setChatHistory([{ id: 'intro', text, sender: 'ai', timestamp: new Date().toISOString() }]);
-  };
-
-  const restoreSession = async (uid: string) => {
-    try {
-      const { data: convData } = await supabase
-        .from('conversations')
-        .select('id, summary')
-        .eq('user_id', uid)
-        .order('timestamp', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (convData) {
-        setConversationId(convData.id);
-        if (convData.summary) setSummary(convData.summary);
-        await fetchMessages(convData.id);
-      } else {
-        addSystemMessage("I'm here. Tell me the person, character, or book whose essence you'd like me to carry.");
-      }
-    } catch (e) { console.log('Error restoring session:', e); }
-  };
-
-  const fetchMessages = async (convId: string) => {
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', convId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (data && data.length > 0) {
-      const formatted: Message[] = data.map((m: any) => ({
-        id: m._id || m.id,
-        text: m.text,
-        sender: m.is_user ? 'user' : 'ai',
-        timestamp: m.created_at
-      }));
-      setChatHistory(formatted);
-      setTurnCount(formatted.length);
-    } else {
-      addSystemMessage("I'm here. Tell me the person, character, or book whose essence you'd like me to carry.");
+  useEffect(() => {
+    if (isInitiated && seconds > 0) {
+      timerRef.current = setInterval(() => {
+        setSeconds(prev => Math.max(0, prev - 1));
+      }, 1000);
     }
-  };
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isInitiated]);
 
-  const fetchLens = async (uid: string) => {
-    try {
-      const { data } = await supabase.from('profiles').select('active_essence_pep').eq('id', uid).maybeSingle();
-      if (data?.active_essence_pep) {
-        if (typeof data.active_essence_pep === 'object') {
-            setActiveLens(data.active_essence_pep.name || 'Gateway');
-            setActiveStrategy(data.active_essence_pep.strategy || '');
-        } else {
-            setActiveLens(data.active_essence_pep);
-            setActiveStrategy('');
-        }
-      }
-    } catch (e) { console.log("Lens error", e); }
+  const formatTime = (s: number) => {
+    const mins = Math.floor(s / 60);
+    const secs = s % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleSend = async () => {
-    if (!message.trim() || !userId) return;
+    if (!message.trim() || !userId || loading || (isInitiated && seconds <= 0)) return;
+    
     const userText = message.trim();
     setMessage('');
-    setThinkingText(THINKING_STATES[Math.floor(Math.random() * THINKING_STATES.length)]);
-    Keyboard.dismiss(); // Optional: Close keyboard on send if you prefer
-
-    const optimisticMsg: Message = { 
-      id: Date.now().toString(), text: userText, sender: 'user', timestamp: new Date().toISOString() 
-    };
-    setChatHistory(prev => [optimisticMsg, ...prev]);
-    setTurnCount(prev => prev + 1);
     setLoading(true);
 
+    if (!isInitiated && userText.toUpperCase() === 'HI') {
+      setIsInitiated(true);
+    }
+
+    const tempId = `u-${Date.now()}`;
+    setChatHistory(prev => [{ id: tempId, content: userText, role: 'user', created_at: new Date().toISOString() }, ...prev]);
+
     try {
-      let currentConvId = conversationId;
-      if (!currentConvId) {
-        const { data: newConv, error: convError } = await supabase
-          .from('conversations')
-          .insert({
-            user_id: userId, title: userText.substring(0, 30), status: 'active', timestamp: new Date().toISOString(), summary: {}
-          })
-          .select().single();
-        if (convError) throw convError;
-        currentConvId = newConv.id;
-        setConversationId(newConv.id);
-      }
+      // FIX 401: Get session token
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
 
-      await supabase.from('messages').insert({
-        conversation_id: currentConvId, user_id: userId, text: userText, is_user: true, created_at: new Date().toISOString()
+      const response = await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/chat-turn`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json', 
+          'apikey': process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+          'Authorization': `Bearer ${token}` // Critical for Edge Function Auth
+        },
+        body: JSON.stringify({
+          message: userText,
+          user_id: userId,
+          history: chatHistory.slice(0, 10).map(m => ({ role: m.role, content: m.content })).reverse()
+        }),
       });
 
-      const contextMessages = chatHistory.slice(0, 15).map(m => ({
-        role: m.sender === 'user' ? 'user' : 'assistant', content: m.text
-      })).reverse(); 
+      if (!response.ok) throw new Error(`Server Error: ${response.status}`);
 
-      const { data, error } = await supabase.functions.invoke('chat-turn', {
-        body: { 
-            message: userText, user_id: userId, conversation_id: currentConvId,
-            history: contextMessages, lens: activeLens, summary: summary, message_count: turnCount + 1 
-        }
-      });
-      if (error) throw error;
-      if (data.summary) setSummary(data.summary);
-
-      const aiMsg: Message = { id: Date.now().toString() + '_ai', text: data.reply, sender: 'ai', timestamp: new Date().toISOString() };
-      setChatHistory(prev => [aiMsg, ...prev]);
-
-      await supabase.from('messages').insert({
-        conversation_id: currentConvId, user_id: userId, text: data.reply, is_user: false, created_at: new Date().toISOString()
-      });
-      await fetchLens(userId);
-
-    } catch (err) {
-      console.error(err);
-      if (Platform.OS !== 'web') Alert.alert("Error", "Connection failed.");
+      const result = await response.json();
+      setChatHistory(prev => [{ id: `ai-${Date.now()}`, content: result.content, role: 'assistant', created_at: new Date().toISOString() }, ...prev]);
+    } catch (err: any) {
+      setSystemError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const renderItem = ({ item }: { item: Message }) => {
-    const isUser = item.sender === 'user';
-    return (
-      <View style={[styles.bubbleRow, isUser ? styles.userRow : styles.aiRow]}>
-        <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-          <Text style={[styles.messageText, isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
-        </View>
-      </View>
-    );
+  // Handle Enter Key for Web and Mobile
+  const handleKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+    if (IS_WEB && e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
+
+  const intensity = isInitiated ? Math.sin(((1800 - seconds) / 1800) * Math.PI) : 0.1;
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView 
-        style={styles.keyboardContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-      >
-        <View style={styles.header}>
-          <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, { width: `${Math.min(turnCount * 2, 100)}%`, backgroundColor: turnCount < 10 ? '#4caf50' : '#ff9800' }]} />
-          </View>
-          <Text style={styles.phaseText}>{activeLens.toUpperCase()}</Text>
-        </View>
+      <View style={styles.webWrapper}>
+        <View style={[styles.glow, { opacity: intensity * 0.4 }]} />
 
-        <FlatList
-          ref={flatListRef}
-          data={chatHistory}
-          renderItem={renderItem}
-          keyExtractor={item => item.id}
-          inverted 
-          contentContainerStyle={styles.listContent}
-          style={styles.list}
-          keyboardDismissMode="on-drag"
-        />
-
-        {loading && (
-          <View style={styles.loadingContainer}>
-            <Text style={styles.loadingText}>{thinkingText}</Text>
+        <KeyboardAvoidingView 
+          style={{ flex: 1 }} 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <View style={styles.header}>
+            <Text style={[styles.timerText, seconds < 60 && isInitiated && { color: '#FF4444' }]}>
+              {isInitiated ? formatTime(seconds) : "--:--"}
+            </Text>
+            {systemError && <Text style={{ color: 'red', fontSize: 10 }}>{systemError}</Text>}
           </View>
-        )}
 
-        <View style={styles.inputWrapper}>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Speak your truth..."
-              placeholderTextColor="#999"
-              value={message}
-              onChangeText={setMessage}
-              multiline
-              editable={!loading}
-            />
-            <TouchableOpacity onPress={handleSend} disabled={!message.trim() || loading} style={[styles.sendButton, (!message.trim() || loading) && styles.sendButtonDisabled]}>
-              {loading ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="arrow-up" size={20} color="#fff" />}
-            </TouchableOpacity>
+          <FlatList
+            data={chatHistory}
+            keyExtractor={(item) => item.id}
+            inverted
+            contentContainerStyle={styles.listContent}
+            ListFooterComponent={() => (
+              <View>
+                <Text style={styles.thresholdText}>{THRESHOLD_OPENER}</Text>
+                {isInitiated && <Text style={styles.canonicalText}>{CANONICAL_OPENER}</Text>}
+              </View>
+            )}
+            renderItem={({ item }) => (
+              <View style={[styles.messageWrapper, item.role === 'user' ? styles.userWrapper : styles.aiWrapper]}>
+                <Text style={[styles.messageText, item.role === 'user' ? styles.userText : styles.aiText]}>
+                  {item.content}
+                </Text>
+              </View>
+            )}
+          />
+
+          <View style={styles.inputWrapper}>
+            <View style={styles.inputContainer}>
+              <TextInput 
+                style={styles.input} 
+                value={message} 
+                onChangeText={setMessage} 
+                placeholder={seconds > 0 ? "Speak..." : "Window closed."}
+                placeholderTextColor="#666"
+                editable={!loading && (seconds > 0 || !isInitiated)}
+                multiline
+                onKeyPress={handleKeyPress} // For Web Enter Key
+                onSubmitEditing={IS_WEB ? undefined : handleSend} // For Mobile Enter Key
+                blurOnSubmit={false}
+              />
+              <TouchableOpacity onPress={handleSend} style={styles.sendButton} disabled={!message.trim() || loading}>
+                <Ionicons name="arrow-up" size={24} color={isInitiated ? "#FFF" : "#666"} />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#fff' },
-  keyboardContainer: { flex: 1 },
-  header: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0', alignItems: 'center', backgroundColor: '#fff' },
-  progressBarBg: { height: 3, backgroundColor: '#f0f0f0', width: '100%', borderRadius: 2, overflow: 'hidden' },
-  progressBarFill: { height: '100%' },
-  phaseText: { fontSize: 10, color: '#aaa', marginTop: 8, letterSpacing: 1.5, fontWeight: '600', textTransform: 'uppercase' },
-  list: { flex: 1, backgroundColor: '#fff' },
-  listContent: { paddingHorizontal: 16, paddingBottom: 20, paddingTop: 20 },
-  bubbleRow: { marginBottom: 12, flexDirection: 'row', width: '100%' },
-  userRow: { justifyContent: 'flex-end' },
-  aiRow: { justifyContent: 'flex-start' },
-  bubble: { maxWidth: '80%', padding: 12, borderRadius: 18 },
-  userBubble: { backgroundColor: '#1B4D1B', borderBottomRightRadius: 2 },
-  aiBubble: { backgroundColor: '#F2F2F2', borderBottomLeftRadius: 2 },
-  messageText: { fontSize: 16, lineHeight: 22 },
-  userText: { color: '#fff' },
-  aiText: { color: '#000' },
-  loadingContainer: { paddingVertical: 8, alignItems: 'center', backgroundColor: '#fff' },
-  loadingText: { color: '#888', fontSize: 12, fontStyle: 'italic' },
-  inputWrapper: { borderTopWidth: 1, borderTopColor: '#f0f0f0', backgroundColor: '#fff', paddingBottom: 10 },
-  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 12 },
-  input: { flex: 1, backgroundColor: '#F9F9F9', borderRadius: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, maxHeight: 100, fontSize: 16, color: '#333' },
-  sendButton: { backgroundColor: '#1B4D1B', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 },
-  sendButtonDisabled: { backgroundColor: '#ccc' },
+  safeArea: { flex: 1, backgroundColor: '#000' },
+  webWrapper: {
+    flex: 1,
+    width: IS_WEB ? 500 : '100%',
+    alignSelf: 'center',
+    backgroundColor: '#000',
+    borderLeftWidth: IS_WEB ? 1 : 0,
+    borderRightWidth: IS_WEB ? 1 : 0,
+    borderColor: '#222',
+  },
+  glow: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#4466FF',
+    borderRadius: width,
+    transform: [{ scale: 1.5 }],
+    opacity: 0,
+  },
+  header: { paddingVertical: 20, alignItems: 'center', zIndex: 10 },
+  timerText: { color: '#FFF', fontSize: 14, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', letterSpacing: 4 },
+  listContent: { paddingHorizontal: 20, paddingBottom: 20 },
+  thresholdText: { color: '#666', fontSize: 16, lineHeight: 24, marginBottom: 30, fontStyle: 'italic' },
+  canonicalText: { color: '#AAA', fontSize: 18, lineHeight: 26, marginBottom: 40, fontWeight: '300' },
+  messageWrapper: { marginVertical: 12, width: '100%' },
+  userWrapper: { alignItems: 'flex-end' },
+  aiWrapper: { alignItems: 'flex-start' },
+  messageText: { fontSize: 17, lineHeight: 24 },
+  userText: { color: '#FFF', textAlign: 'right' },
+  aiText: { color: '#CCC', textAlign: 'left' },
+  inputWrapper: { padding: 20, borderTopWidth: 1, borderTopColor: '#111' },
+  inputContainer: { flexDirection: 'row', alignItems: 'flex-end' },
+  input: { flex: 1, color: '#FFF', fontSize: 18, paddingVertical: 10, maxHeight: 150 },
+  sendButton: { paddingBottom: 8, paddingLeft: 10 },
 });

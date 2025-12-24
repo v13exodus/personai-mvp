@@ -1,8 +1,7 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
-import { lockState } from '../components/BiometricGate';
-import supabase from '../supabaseConfig';
+import { supabase } from '../lib/supabase';
 
 export default function Index() {
   const router = useRouter();
@@ -13,11 +12,8 @@ export default function Index() {
 
     const init = async () => {
       // 1. WEB SPECIFIC: Manual Hash Handling
-      // Sometimes Supabase auto-detect fails on redirects; we do it manually here.
       if (Platform.OS === 'web' && window.location.hash?.includes('access_token')) {
-        console.log('Web: Hash detected. Manually parsing tokens...');
         try {
-          // Remove the '#' and parse
           const params = new URLSearchParams(window.location.hash.substring(1));
           const access_token = params.get('access_token');
           const refresh_token = params.get('refresh_token');
@@ -25,9 +21,7 @@ export default function Index() {
           if (access_token && refresh_token) {
             const { error } = await supabase.auth.setSession({ access_token, refresh_token });
             if (!error) {
-              console.log('Manual session set successful.');
-              lockState.justLoggedIn = true;
-              // The listener below will catch the SIGNED_IN event next
+              (globalThis as any).oauthSessionEstablished = true;
               return; 
             }
           }
@@ -40,10 +34,10 @@ export default function Index() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         console.log('Session found (Cold Start). Redirecting...');
-        if (lockState.justLoggedIn) lockState.isLocked = false;
+        // If we have a session, assume we don't need to lock immediately on cold start
+        (globalThis as any).oauthSessionEstablished = true;
         router.replace('/(tabs)/home');
       } else {
-        // Only stop checking if we didn't just manually set the session
         if (mounted && !window.location.hash?.includes('access_token')) {
           setChecking(false);
         }
@@ -54,12 +48,9 @@ export default function Index() {
 
     // 3. Listener handles the result
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log(`Auth Event: ${event}`);
-      
       if (session) {
-        console.log('Session confirmed. Redirecting...');
-        lockState.justLoggedIn = true;
-        lockState.isLocked = false;
+        console.log(`Auth Event: ${event}. Redirecting...`);
+        (globalThis as any).oauthSessionEstablished = true;
         router.replace('/(tabs)/home');
       }
     });

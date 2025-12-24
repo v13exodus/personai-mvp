@@ -1,5 +1,6 @@
 {
   "expo": {
+    "owner": "v13exodus", 	
     "name": "my-mirror",
     "slug": "my-mirror",
     "version": "1.0.0",

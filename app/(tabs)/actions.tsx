@@ -1,244 +1,186 @@
-import React, { useEffect, useState, useRef } from 'react';
+// functions/actions.tsx
+import React, { useEffect, useState } from 'react';
 import { 
-  View, Text, TextInput, FlatList, TouchableOpacity, 
-  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert 
+  View, Text, FlatList, TouchableOpacity, StyleSheet, 
+  Platform, ActivityIndicator, Alert, TextInput 
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
-import supabase from '../../supabaseConfig'; 
-
-// --- NOTIFICATION CONFIG (Mobile Only) ---
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-}
+import * as Haptics from 'expo-haptics';
+import { supabase } from '../../lib/supabase';
+import { useRouter } from 'expo-router';
 
 type ActionItem = {
   id: string;
   title: string;
-  description?: string;
+  description?: string; // This is the physical GOAL
+  routine_instruction?: string; // This is the essence ROUTINE
   status: 'pending' | 'in_progress' | 'completed';
   scheduled_at?: string;
   reminder_policy?: 'standard' | 'persistent' | 'aggressive';
+  origin?: string; 
+  requires_submission?: boolean;
+  is_locked?: boolean;
+  results_reflection?: string;
+  submission_text?: string;
 };
 
 export default function ActionScreen() {
+  const router = useRouter();
   const [actions, setActions] = useState<ActionItem[]>([]);
-  const [newTask, setNewTask] = useState('');
+  const [protocol, setProtocol] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [reflection, setReflection] = useState('');
+  const [submission, setSubmission] = useState('');
 
-  // 1. INIT & PERMISSIONS
   useEffect(() => {
-    registerForPushNotificationsAsync();
-    fetchActions();
-    
-    // Subscribe to real-time changes
-    const subscription = supabase
-      .channel('public:actions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'actions' }, fetchActions)
+    fetchData();
+    const subscription = supabase.channel('public:actions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'actions' }, fetchData)
       .subscribe();
-
     return () => { supabase.removeChannel(subscription); };
   }, []);
 
-  const fetchActions = async () => {
+  const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data, error } = await supabase
-      .from('actions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-    
-    if (!error && data) {
-      setActions(data);
-      scheduleNags(data); // Sync local notifications
-    }
+    const { data: actionData } = await supabase.from('actions').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+    const { data: missionData } = await supabase.from('missions').select('protocol').eq('user_id', user.id).eq('status', 'active').maybeSingle();
+
+    if (actionData) setActions(actionData);
+    if (missionData) setProtocol(missionData.protocol);
     setLoading(false);
   };
 
-  // 2. NAG ENGINE (Local Notifications - Mobile Only)
-  const scheduleNags = async (items: ActionItem[]) => {
-    // GUARD: Web browsers cannot schedule local notifications
-    if (Platform.OS === 'web') return;
+  const submitToAudit = async (item: ActionItem) => {
+    if (!reflection.trim()) {
+      Alert.alert("REFLECTION REQUIRED", "The Socratic demands a reflection on your labor before the audit.");
+      return;
+    }
 
-    try {
-      // Clear old schedules to prevent duplicates
-      await Notifications.cancelAllScheduledNotificationsAsync();
+    const { error } = await supabase.from('actions').update({
+      status: 'completed',
+      results_reflection: reflection,
+      submission_text: submission,
+      is_locked: true,
+      completed_at: new Date().toISOString()
+    }).eq('id', item.id);
 
-      const pending = items.filter(i => i.status === 'pending' && i.scheduled_at);
-
-      for (const item of pending) {
-        if (!item.scheduled_at) continue;
-        const triggerDate = new Date(item.scheduled_at);
-        if (triggerDate < new Date()) continue; // Skip past
-
-        // Policy: STANDARD (1 alert)
-        await Notifications.scheduleNotificationAsync({
-          content: { title: "Action Required", body: item.title },
-          trigger: triggerDate,
-        });
-
-        // Policy: PERSISTENT (Add follow-ups)
-        if (item.reminder_policy === 'persistent' || item.reminder_policy === 'aggressive') {
-          await Notifications.scheduleNotificationAsync({
-            content: { title: "Reminder", body: `Still pending: ${item.title}` },
-            trigger: new Date(triggerDate.getTime() + 30 * 60000), // +30 mins
-          });
-        }
-
-        // Policy: AGGRESSIVE (Nag every 10 mins)
-        if (item.reminder_policy === 'aggressive') {
-          for (let i = 1; i <= 3; i++) {
-             await Notifications.scheduleNotificationAsync({
-              content: { title: "DO IT NOW", body: `Stop procrastinating: ${item.title}` },
-              trigger: new Date(triggerDate.getTime() + (i * 10) * 60000),
-            });
-          }
-        }
-      }
-    } catch (e) {
-      console.log('Notification scheduling skipped:', e);
+    if (!error) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("ARTIFACT RECEIVED", "The Registry is locked. The Doctor is waiting in the Review Room.",
+        [{ text: "ENTER REVIEW ROOM", onPress: () => router.push('/(tabs)/chat') }]
+      );
+      setExpandedId(null);
+      setReflection('');
+      setSubmission('');
+      fetchData();
     }
   };
 
-  const addTask = async () => {
-    if (!newTask.trim()) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    await supabase.from('actions').insert({ 
-      title: newTask, 
-      user_id: user.id,
-      reminder_policy: 'standard' // Default for manual entry
-    });
-    setNewTask('');
-    // Realtime sub will catch the update
-  };
-
-  const toggleAction = async (id: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'completed' ? 'pending' : 'completed';
-    // Optimistic UI
-    setActions(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
-    
-    await supabase.from('actions').update({ status: newStatus }).eq('id', id);
-    // Re-sync notifications (removes nag if completed)
-    fetchActions(); 
-  };
-
-  const deleteAction = async (id: string) => {
-    setActions(prev => prev.filter(a => a.id !== id));
-    await supabase.from('actions').delete().eq('id', id);
-  };
-
-  // --- RENDER ---
   const renderItem = ({ item }: { item: ActionItem }) => {
     const isCompleted = item.status === 'completed';
-    const isAggressive = item.reminder_policy === 'aggressive';
+    const isLocked = item.is_locked;
+    const isTrial = item.origin === 'trial' || item.origin === 'orientation';
+    const isExpanded = expandedId === item.id;
 
     return (
-      <View style={[styles.itemContainer, isAggressive && !isCompleted && styles.aggressiveBorder]}>
-        <TouchableOpacity style={styles.checkButton} onPress={() => toggleAction(item.id, item.status)}>
-          <Ionicons 
-            name={isCompleted ? "checkbox" : "square-outline"} 
-            size={24} 
-            color={isCompleted ? "#6A7D6A" : (isAggressive ? "#D32F2F" : "#1B4D1B")} 
-          />
-        </TouchableOpacity>
-        
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.itemText, isCompleted && styles.completedText]}>{item.title}</Text>
-          {item.description && <Text style={styles.descText}>{item.description}</Text>}
-          {item.scheduled_at && !isCompleted && (
-             <Text style={styles.timeText}>
-               Due: {new Date(item.scheduled_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-               {isAggressive && " (URGENT)"}
-             </Text>
-          )}
+      <View style={[styles.itemContainer, isCompleted && styles.completedContainer, isLocked && styles.lockedContainer]}>
+        <View style={styles.mainRow}>
+          <TouchableOpacity style={styles.checkButton} onPress={() => !isLocked && setExpandedId(isExpanded ? null : item.id)}>
+            <View style={[styles.customCheck, isCompleted && styles.customCheckActive]}>
+              {isLocked ? <Ionicons name="lock-closed" size={14} color="#FFF" /> : (isCompleted && <Ionicons name="checkmark" size={16} color="#FFF" />)}
+            </View>
+          </TouchableOpacity>
+          
+          <View style={{ flex: 1 }}>
+            {isTrial && <Text style={styles.trialLabel}>WORTHINESS TRIAL</Text>}
+            <Text style={[styles.itemText, isCompleted && styles.completedText]}>{item.title}</Text>
+            {item.description && !isExpanded && <Text style={styles.descText} numberOfLines={1}>{item.description}</Text>}
+          </View>
         </View>
 
-        <TouchableOpacity onPress={() => deleteAction(item.id)}>
-          <Ionicons name="trash-outline" size={20} color="#D32F2F" />
-        </TouchableOpacity>
+        {isExpanded && !isLocked && (
+          <View style={styles.formContainer}>
+            <View style={styles.intertwinedBox}>
+                <Text style={styles.miniLabel}>THE ACTION (GOAL)</Text>
+                <Text style={styles.goalText}>{item.description}</Text>
+                
+                {item.routine_instruction && (
+                  <>
+                    <View style={styles.divider} />
+                    <Text style={styles.miniLabel}>THE ROUTINE (ESSENCE)</Text>
+                    <Text style={styles.routineText}>{item.routine_instruction}</Text>
+                  </>
+                )}
+            </View>
+            
+            <Text style={styles.label}>RESULTS & REFLECTION</Text>
+            <TextInput style={styles.textArea} placeholder="Where did the 'Glitch' appear? How did you inhabit the Persona?" placeholderTextColor="#999" multiline value={reflection} onChangeText={setReflection} />
+            
+            {item.requires_submission && (
+              <>
+                <Text style={styles.label}>ARTIFACT SUBMISSION</Text>
+                <TextInput style={[styles.textArea, { height: 100 }]} placeholder="Paste your labor/work here..." placeholderTextColor="#999" multiline value={submission} onChangeText={setSubmission} />
+              </>
+            )}
+
+            <TouchableOpacity style={styles.submitBtn} onPress={() => submitToAudit(item)}>
+              <Text style={styles.submitBtnText}>SUBMIT FOR AUDIT</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     );
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Actions</Text>
-      
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="New action..."
-          placeholderTextColor="#6A7D6A"
-          value={newTask}
-          onChangeText={setNewTask}
-          onSubmitEditing={addTask}
-        />
-        <TouchableOpacity style={styles.addButton} onPress={addTask}>
-          <Ionicons name="add" size={24} color="#FFF" />
-        </TouchableOpacity>
-      </KeyboardAvoidingView>
+      <View style={styles.headerRow}>
+        <View>
+          <Text style={styles.headerTitle}>REGISTRY</Text>
+          {protocol && <Text style={styles.priceTag}>PROTOCOL: {protocol.toUpperCase()}</Text>}
+        </View>
+        <Text style={styles.headerCount}>{actions.filter(a => a.status === 'pending').length} ACTIVE</Text>
+      </View>
 
-      {loading ? (
-        <ActivityIndicator style={{ marginTop: 20 }} color="#1B4D1B" />
-      ) : (
-        <FlatList
-          data={actions}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={{ paddingBottom: 100 }}
-          ListEmptyComponent={<Text style={styles.emptyText}>No pending actions.</Text>}
-        />
-      )}
+      {loading ? <ActivityIndicator style={{ marginTop: 40 }} color="#1B4D1B" /> : 
+        <FlatList data={actions} keyExtractor={(item) => item.id} renderItem={renderItem} contentContainerStyle={{ paddingBottom: 100 }} ListEmptyComponent={<View style={styles.emptyContainer}><Text style={styles.emptyText}>Registry Clear.</Text></View>} />
+      }
     </View>
   );
 }
 
-// 3. PERMISSIONS HELPER
-async function registerForPushNotificationsAsync() {
-  if (Platform.OS === 'web') return; // GUARD: No push on web yet
-
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
-    });
-  }
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-  if (finalStatus !== 'granted') {
-    console.log('Failed to get push token for push notification!');
-    return;
-  }
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F1E3', paddingTop: 60, paddingHorizontal: 20 },
-  header: { fontSize: 32, fontWeight: 'bold', color: '#123122', marginBottom: 20 },
-  inputContainer: { flexDirection: 'row', marginBottom: 20, gap: 10 },
-  input: { flex: 1, backgroundColor: '#FFFFFF', padding: 15, borderRadius: 12, fontSize: 16, color: '#123122', elevation: 2 },
-  addButton: { backgroundColor: '#1B4D1B', width: 50, justifyContent: 'center', alignItems: 'center', borderRadius: 12 },
-  itemContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', padding: 15, borderRadius: 12, marginBottom: 10, elevation: 1 },
-  aggressiveBorder: { borderWidth: 1, borderColor: '#D32F2F', backgroundColor: '#FFF5F5' },
-  checkButton: { marginRight: 15 },
-  itemText: { fontSize: 16, color: '#123122', fontWeight: '500' },
-  descText: { fontSize: 12, color: '#666', marginTop: 2 },
-  timeText: { fontSize: 12, color: '#D32F2F', marginTop: 4, fontWeight: 'bold' },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 30 },
+  headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#123122', letterSpacing: 4 },
+  headerCount: { fontSize: 10, fontWeight: 'bold', color: '#6A7D6A', letterSpacing: 1 },
+  priceTag: { fontSize: 9, color: '#D32F2F', fontWeight: 'bold', marginTop: 4, letterSpacing: 1 },
+  itemContainer: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 2, marginBottom: 12, borderWidth: 1, borderColor: '#E5E0D5' },
+  mainRow: { flexDirection: 'row', alignItems: 'center' },
+  completedContainer: { backgroundColor: '#F9F9F9', opacity: 0.8 },
+  lockedContainer: { backgroundColor: '#F0F0F0' },
+  trialLabel: { fontSize: 8, fontWeight: 'bold', color: '#D32F2F', letterSpacing: 2, marginBottom: 6 },
+  customCheck: { width: 24, height: 24, borderWidth: 2, borderColor: '#1B4D1B', borderRadius: 2, marginRight: 15, justifyContent: 'center', alignItems: 'center' },
+  customCheckActive: { backgroundColor: '#1B4D1B' },
+  itemText: { fontSize: 16, color: '#123122', fontWeight: '600' },
+  descText: { fontSize: 13, color: '#6A7D6A', marginTop: 4, fontStyle: 'italic' },
   completedText: { textDecorationLine: 'line-through', color: '#6A7D6A' },
-  emptyText: { textAlign: 'center', color: '#6A7D6A', marginTop: 40, fontStyle: 'italic' },
+  formContainer: { marginTop: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: '#EEE' },
+  intertwinedBox: { backgroundColor: '#F9F9F9', padding: 15, borderRadius: 2, marginBottom: 20, borderWidth: 1, borderColor: '#EEE' },
+  miniLabel: { fontSize: 8, fontWeight: 'bold', color: '#1B4D1B', letterSpacing: 1, marginBottom: 4 },
+  goalText: { fontSize: 14, color: '#123122', marginBottom: 10 },
+  routineText: { fontSize: 14, color: '#1B4D1B', fontStyle: 'italic' },
+  divider: { height: 1, backgroundColor: '#EEE', marginVertical: 10 },
+  label: { fontSize: 9, fontWeight: 'bold', color: '#1B4D1B', marginBottom: 8 },
+  textArea: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5E0D5', padding: 12, fontSize: 14, marginBottom: 15, textAlignVertical: 'top', height: 70 },
+  submitBtn: { backgroundColor: '#1B4D1B', padding: 15, alignItems: 'center' },
+  submitBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 },
+  emptyContainer: { alignItems: 'center', marginTop: 100 },
+  emptyText: { color: '#6A7D6A', fontSize: 14, fontWeight: 'bold' },
+  checkButton: { paddingVertical: 5 }
 });
